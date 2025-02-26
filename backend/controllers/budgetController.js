@@ -15,15 +15,34 @@ const setBudget = async (req, res) => {
     }
 };
 
-//  Get Budgets
+// //  Get Budgets
+// const getBudgets = async (req, res) => {
+//     try {
+//         const budgets = await Budget.find({ user: req.user._id });
+//         res.status(200).json(budgets);
+//     } catch (error) {
+//         res.status(500).json({ message: 'Error retrieving budgets', error });
+//     }
+// };
+
+
+
+// Get All Budgets (Auto-update spent amount)
 const getBudgets = async (req, res) => {
     try {
         const budgets = await Budget.find({ user: req.user._id });
-        res.status(200).json(budgets);
+
+        //  Update spent amount for each budget before sending response
+        for (let budget of budgets) {
+            await budget.updateSpentAmount();
+        }
+
+        res.status(200).json({ message: 'Budgets retrieved successfully', budgets });
     } catch (error) {
         res.status(500).json({ message: 'Error retrieving budgets', error });
     }
 };
+
 
 //  Update Budget
 const updateBudget = async (req, res) => {
