@@ -1,9 +1,12 @@
 const Transaction = require('../models/Transaction');
+const Budget = require('../models/Budget');
 
-//  Add Transaction (Regular User)
+//  Add Transaction (Tracks Budget Spending)
 const addTransaction = async (req, res) => {
     try {
         const { type, amount, category, tags, description } = req.body;
+
+        //  Create Transaction
         const transaction = await Transaction.create({
             user: req.user._id,
             type,
@@ -12,11 +15,29 @@ const addTransaction = async (req, res) => {
             tags,
             description
         });
-        res.status(201).json({ message: 'Transaction created successfully', transaction });
+
+        //  If it's an expense, update the budget
+        if (type === 'expense') {
+            const budget = await Budget.findOne({ user: req.user._id, category });
+
+            if (budget) {
+                await budget.updateSpentAmount(); //  Recalculate spent amount
+
+                if (budget.spent > budget.limit) {
+                    return res.status(200).json({
+                        message: `Transaction added successfully, but WARNING: You exceeded the budget for ${category}!`,
+                        transaction
+                    });
+                }
+            }
+        }
+
+        res.status(201).json({ message: 'Transaction added successfully', transaction });
     } catch (error) {
         res.status(500).json({ message: 'Error adding transaction', error });
     }
 };
+
 
 //  Get Transactions (User can see their own, Admin can see all)
 const getTransactions = async (req, res) => {
