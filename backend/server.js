@@ -12,8 +12,7 @@ const reportRoutes = require('./routes/transactionReportRoute');
 dotenv.config();
 connectDB();
 
-console.log("Email User:", process.env.EMAIL_USER);
-console.log("Email Pass:", process.env.EMAIL_PASS ? "Loaded" : "Not Loaded");
+
 
 const app = express();
 app.use(express.json());

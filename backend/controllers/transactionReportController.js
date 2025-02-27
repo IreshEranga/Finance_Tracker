@@ -3,7 +3,6 @@ const Transaction = require('../models/Transaction');
 const Budget = require('../models/Budget');
 const sendEmail = require('../config/emailConfig');
 
-// ✅ Generate & Email PDF Report
 const generateReportPDFAndEmail = async (req, res) => {
     try {
         let filter = req.user.role === 'admin' ? {} : { user: req.user._id };
@@ -35,12 +34,12 @@ const generateReportPDFAndEmail = async (req, res) => {
         doc.on('end', async () => {
             const pdfData = Buffer.concat(pdfBuffer);
 
-            // ✅ Send PDF via Email
+            // ✅ Send Email with HTML Template
             await sendEmail(
                 req.user.email,
                 "Your Financial Report",
-                "Attached is your latest financial report.",
-                [{ filename: "Financial_Report.pdf", content: pdfData }]
+                { totalIncome, totalExpenses, netBalance: totalIncome - totalExpenses },
+                pdfData
             );
 
             res.status(200).json({ message: "Financial report emailed successfully!" });
