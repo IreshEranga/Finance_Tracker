@@ -17,6 +17,7 @@ const generateReportPDFAndEmail = async (req, res) => {
 
         const categoryExpenses = await Transaction.aggregate([{ $match: filter }, { $group: { _id: "$category", totalSpent: { $sum: "$amount" } } }]);
         const budgets = await Budget.find(filter);
+        const transactions = await Transaction.find(filter).sort({ date: -1 }); // Sort by latest first
 
         const budgetUsage = budgets.map(budget => ({
             category: budget.category,
@@ -27,14 +28,14 @@ const generateReportPDFAndEmail = async (req, res) => {
         }));
 
         // ✅ Create PDF Document In-Memory
-        const doc = new PDFDocument();
+        const doc = new PDFDocument({ margin: 50 });
         let pdfBuffer = [];
 
         doc.on('data', chunk => pdfBuffer.push(chunk));
         doc.on('end', async () => {
             const pdfData = Buffer.concat(pdfBuffer);
 
-            // ✅ Send Email with HTML Template
+            // ✅ Send Email with the updated PDF
             await sendEmail(
                 req.user.email,
                 "Your Financial Report",
@@ -45,21 +46,71 @@ const generateReportPDFAndEmail = async (req, res) => {
             res.status(200).json({ message: "Financial report emailed successfully!" });
         });
 
-        // ✅ PDF Content
-        doc.fontSize(18).text("Financial Report", { align: "center" }).moveDown();
-        doc.fontSize(14).text(`Total Income: $${totalIncome}`);
-        doc.fontSize(14).text(`Total Expenses: $${totalExpenses}`);
-        doc.fontSize(14).text(`Net Balance: $${totalIncome - totalExpenses}`).moveDown();
+        // ✅ Apply Clean Font
+        doc.font('Helvetica');
 
-        doc.fontSize(16).text("Category Expenses", { underline: true }).moveDown();
+        // ✅ PDF Header
+        doc.fontSize(22).fillColor("#4CAF50").text("📊 Finance Tracker Report", { align: "center" }).moveDown(2);
+        doc.fontSize(12).fillColor("black").text(`Date: ${new Date().toLocaleDateString()}`, { align: "right" }).moveDown();
+
+        // ✅ Financial Summary
+        doc.fontSize(16).fillColor("#333").text("📌 Financial Summary:", { underline: true }).moveDown();
+        doc.fontSize(12).fillColor("black");
+        doc.text(`Total Income:   $${totalIncome.toFixed(2)}`, { align: "left" });
+        doc.text(`Total Expenses: $${totalExpenses.toFixed(2)}`, { align: "left" });
+        doc.fillColor(totalIncome - totalExpenses >= 0 ? "green" : "red")
+            .text(`Net Balance:    $${(totalIncome - totalExpenses).toFixed(2)}`, { align: "left" }).moveDown();
+
+        // ✅ Expenses by Category
+        doc.fontSize(16).fillColor("#333").text("📌 Expenses by Category:", { underline: true }).moveDown();
         categoryExpenses.forEach(item => {
-            doc.fontSize(12).text(`${item._id}: $${item.totalSpent}`);
+            doc.fontSize(12).fillColor("black").text(`- ${item._id}: $${item.totalSpent.toFixed(2)}`);
+        });
+        doc.moveDown();
+
+        // ✅ Budget Overview
+        doc.fontSize(16).fillColor("#333").text("📌 Budget Overview:", { underline: true }).moveDown();
+        budgets.forEach(budget => {
+            doc.fontSize(12).fillColor("black")
+                .text(`- ${budget.category}:`, { continued: false })
+                .text(`   🔹 Limit: $${budget.limit.toFixed(2)}`, { align: "left" })
+                .text(`   🔹 Spent: $${budget.spent.toFixed(2)}`, { align: "left" })
+                .text(`   🔹 Remaining: $${(budget.limit - budget.spent).toFixed(2)}`, { align: "left" })
+                .fillColor(budget.spent > budget.limit ? "red" : "green")
+                .text(`   🔹 Status: ${budget.spent > budget.limit ? "❌ Over Budget" : "✔ Within Budget"}`, { align: "left" })
+                .moveDown();
         });
 
-        doc.moveDown().fontSize(16).text("Budget Usage", { underline: true }).moveDown();
-        budgetUsage.forEach(budget => {
-            doc.fontSize(12).text(`${budget.category}: Limit $${budget.limit}, Spent $${budget.spent}, Remaining $${budget.remaining}, Status: ${budget.status}`);
+        // ✅ Transactions Table
+        doc.fontSize(16).fillColor("#333").text("📌 Recent Transactions:", { underline: true }).moveDown();
+        doc.fontSize(12).fillColor("black");
+
+        // Table Header
+        const startX = 50;
+        const startY = doc.y;
+        const colWidths = [150, 100, 100, 200]; // Column widths: Date, Type, Amount, Category
+
+        doc.text("Date", startX, startY, { width: colWidths[0], align: "left" });
+        doc.text("Type", startX + colWidths[0], startY, { width: colWidths[1], align: "left" });
+        doc.text("Amount", startX + colWidths[0] + colWidths[1], startY, { width: colWidths[2], align: "left" });
+        doc.text("Category", startX + colWidths[0] + colWidths[1] + colWidths[2], startY, { width: colWidths[3], align: "left" });
+        doc.moveDown(0.5);
+
+        // Draw a line under the headers
+        doc.moveTo(startX, doc.y).lineTo(startX + colWidths[0] + colWidths[1] + colWidths[2] + colWidths[3], doc.y).stroke();
+
+        // Table Data
+        transactions.slice(0, 10).forEach((txn) => { // Show only last 10 transactions
+            const y = doc.y + 5;
+            doc.text(new Date(txn.date).toLocaleDateString(), startX, y, { width: colWidths[0], align: "left" });
+            doc.text(txn.type.charAt(0).toUpperCase() + txn.type.slice(1), startX + colWidths[0], y, { width: colWidths[1], align: "left" });
+            doc.text(`$${txn.amount.toFixed(2)}`, startX + colWidths[0] + colWidths[1], y, { width: colWidths[2], align: "left" });
+            doc.text(txn.category, startX + colWidths[0] + colWidths[1] + colWidths[2], y, { width: colWidths[3], align: "left" });
+            doc.moveDown(0.5);
         });
+
+        // ✅ Footer
+        doc.moveDown().fillColor("#777").fontSize(10).text("© Finance Tracker App - All rights reserved.", { align: "center" });
 
         doc.end(); // Finalize PDF
 
