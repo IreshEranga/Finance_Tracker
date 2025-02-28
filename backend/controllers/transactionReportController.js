@@ -7,7 +7,7 @@ const generateReportPDFAndEmail = async (req, res) => {
     try {
         let filter = req.user.role === 'admin' ? {} : { user: req.user._id };
 
-        // ✅ Fetch Data
+        // Fetch Data
         const totals = await Transaction.aggregate([{ $match: filter }, { $group: { _id: "$type", totalAmount: { $sum: "$amount" } } }]);
         let totalIncome = 0, totalExpenses = 0;
         totals.forEach((item) => {
@@ -17,7 +17,7 @@ const generateReportPDFAndEmail = async (req, res) => {
 
         const categoryExpenses = await Transaction.aggregate([{ $match: filter }, { $group: { _id: "$category", totalSpent: { $sum: "$amount" } } }]);
         const budgets = await Budget.find(filter);
-        const transactions = await Transaction.find(filter).sort({ date: -1 }); // Sort by latest first
+        const transactions = await Transaction.find(filter).sort({ date: -1 });
 
         const budgetUsage = budgets.map(budget => ({
             category: budget.category,
@@ -27,92 +27,140 @@ const generateReportPDFAndEmail = async (req, res) => {
             status: budget.spent > budget.limit ? "Over Budget" : "Within Budget"
         }));
 
-        // ✅ Create PDF Document In-Memory
+        // Create PDF Document
         const doc = new PDFDocument({ margin: 50 });
         let pdfBuffer = [];
 
         doc.on('data', chunk => pdfBuffer.push(chunk));
         doc.on('end', async () => {
             const pdfData = Buffer.concat(pdfBuffer);
-
-            // ✅ Send Email with the updated PDF
             await sendEmail(
                 req.user.email,
                 "Your Financial Report",
                 { totalIncome, totalExpenses, netBalance: totalIncome - totalExpenses },
                 pdfData
             );
-
             res.status(200).json({ message: "Financial report emailed successfully!" });
         });
 
-        // ✅ Apply Clean Font
-        doc.font('Helvetica');
+        // Header
+        doc.font('Helvetica-Bold').fontSize(22).fillColor("#4CAF50").text("Finance Report", { align: "center" }).moveDown(1);
+        const formattedDate = new Date().toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
+        doc.font('Times-Roman').fontSize(12).fillColor("black")
+           .text(`Date: ${formattedDate}`, { align: "right" })
+           .moveDown(1.5);
 
-        // ✅ PDF Header
-        doc.fontSize(22).fillColor("#4CAF50").text("📊 Finance Tracker Report", { align: "center" }).moveDown(2);
-        doc.fontSize(12).fillColor("black").text(`Date: ${new Date().toLocaleDateString()}`, { align: "right" }).moveDown();
-
-        // ✅ Financial Summary
-        doc.fontSize(16).fillColor("#333").text("📌 Financial Summary:", { underline: true }).moveDown();
-        doc.fontSize(12).fillColor("black");
-        doc.text(`Total Income:   $${totalIncome.toFixed(2)}`, { align: "left" });
-        doc.text(`Total Expenses: $${totalExpenses.toFixed(2)}`, { align: "left" });
+        // Financial Summary
+        doc.font('Helvetica-Bold').fontSize(16).fillColor("#333").text("Financial Summary:", { underline: true }).moveDown(0.5);
+        doc.font('Times-Roman').fontSize(12).fillColor("black");
+        doc.text(`Total Income: $${totalIncome.toFixed(2)}`);
+        doc.text(`Total Expenses: $${totalExpenses.toFixed(2)}`);
         doc.fillColor(totalIncome - totalExpenses >= 0 ? "green" : "red")
-            .text(`Net Balance:    $${(totalIncome - totalExpenses).toFixed(2)}`, { align: "left" }).moveDown();
+           .text(`Net Balance: $${(totalIncome - totalExpenses).toFixed(2)}`)
+           .moveDown(1);
 
-        // ✅ Expenses by Category
-        doc.fontSize(16).fillColor("#333").text("📌 Expenses by Category:", { underline: true }).moveDown();
-        categoryExpenses.forEach(item => {
-            doc.fontSize(12).fillColor("black").text(`- ${item._id}: $${item.totalSpent.toFixed(2)}`);
+        // Expenses by Category Table
+        doc.font('Helvetica-Bold').fontSize(16).fillColor("#333").text("Expenses by Category:", { underline: true }).moveDown(0.5);
+        const expStartX = 50;
+        const expStartY = doc.y;
+        const expColWidths = [300, 150];
+
+        // Expenses Table Header
+        doc.fillColor("#00695C")
+           .rect(expStartX, expStartY, expColWidths[0] + expColWidths[1], 20)
+           .fill();
+        doc.fillColor("white")
+           .fontSize(12)
+           .text("Category", expStartX + 5, expStartY + 5, { width: expColWidths[0], align: "left" })
+           .text("Amount", expStartX + expColWidths[0] + 5, expStartY + 5, { width: expColWidths[1], align: "right" });
+
+        // Expenses Table Data
+        doc.font('Times-Roman');
+        let currentY = expStartY + 20;
+        categoryExpenses.forEach((item) => {
+            doc.fillColor("black")
+               .text(item._id, expStartX + 5, currentY + 5, { width: expColWidths[0], align: "left" })
+               .text(`$${item.totalSpent.toFixed(2)}`, expStartX + expColWidths[0] + 5, currentY + 5, { width: expColWidths[1], align: "right" });
+            currentY += 20;
         });
-        doc.moveDown();
+        doc.moveTo(expStartX, expStartY).lineTo(expStartX + expColWidths[0] + expColWidths[1], expStartY).stroke();
+        doc.moveTo(expStartX, currentY).lineTo(expStartX + expColWidths[0] + expColWidths[1], currentY).stroke();
+        doc.moveDown(1);
 
-        // ✅ Budget Overview
-        doc.fontSize(16).fillColor("#333").text("📌 Budget Overview:", { underline: true }).moveDown();
-        budgets.forEach(budget => {
-            doc.fontSize(12).fillColor("black")
-                .text(`- ${budget.category}:`, { continued: false })
-                .text(`   🔹 Limit: $${budget.limit.toFixed(2)}`, { align: "left" })
-                .text(`   🔹 Spent: $${budget.spent.toFixed(2)}`, { align: "left" })
-                .text(`   🔹 Remaining: $${(budget.limit - budget.spent).toFixed(2)}`, { align: "left" })
-                .fillColor(budget.spent > budget.limit ? "red" : "green")
-                .text(`   🔹 Status: ${budget.spent > budget.limit ? "❌ Over Budget" : "✔ Within Budget"}`, { align: "left" })
-                .moveDown();
+        // Budget Overview Table
+        doc.font('Helvetica-Bold').fontSize(16).fillColor("#333").text("Budget Overview:", { underline: true }).moveDown(0.5);
+        const budStartX = 50;
+        const budStartY = doc.y;
+        const budColWidths = [150, 90, 90, 90, 90];
+
+        // Budget Table Header
+        doc.fillColor("#00695C")
+           .rect(budStartX, budStartY, budColWidths.reduce((a, b) => a + b), 20)
+           .fill();
+        doc.fillColor("white")
+           .fontSize(12)
+           .text("Category", budStartX + 5, budStartY + 5, { width: budColWidths[0], align: "left" })
+           .text("Limit", budStartX + budColWidths[0] + 5, budStartY + 5, { width: budColWidths[1], align: "right" })
+           .text("Spent", budStartX + budColWidths[0] + budColWidths[1] + 5, budStartY + 5, { width: budColWidths[2], align: "right" })
+           .text("Remaining", budStartX + budColWidths[0] + budColWidths[1] + budColWidths[2] + 5, budStartY + 5, { width: budColWidths[3], align: "right" })
+           .text("Status", budStartX + budColWidths[0] + budColWidths[1] + budColWidths[2] + budColWidths[3] + 5, budStartY + 5, { width: budColWidths[4], align: "center" });
+
+        // Budget Table Data
+        doc.font('Times-Roman');
+        currentY = budStartY + 20;
+        budgetUsage.forEach((budget) => {
+            doc.fillColor("black")
+               .text(budget.category, budStartX + 5, currentY + 5, { width: budColWidths[0], align: "left" })
+               .text(`$${budget.limit.toFixed(2)}`, budStartX + budColWidths[0] + 5, currentY + 5, { width: budColWidths[1], align: "right" })
+               .text(`$${budget.spent.toFixed(2)}`, budStartX + budColWidths[0] + budColWidths[1] + 5, currentY + 5, { width: budColWidths[2], align: "right" })
+               .text(`$${budget.remaining.toFixed(2)}`, budStartX + budColWidths[0] + budColWidths[1] + budColWidths[2] + 5, currentY + 5, { width: budColWidths[3], align: "right" })
+               .fillColor(budget.status === "Over Budget" ? "red" : "green")
+               .text(budget.status, budStartX + budColWidths[0] + budColWidths[1] + budColWidths[2] + budColWidths[3] + 5, currentY + 5, { width: budColWidths[4], align: "center" });
+            currentY += 20;
         });
+        doc.moveTo(budStartX, budStartY).lineTo(budStartX + budColWidths.reduce((a, b) => a + b), budStartY).stroke();
+        doc.moveTo(budStartX, currentY).lineTo(budStartX + budColWidths.reduce((a, b) => a + b), currentY).stroke();
+        doc.moveDown(1);
 
-        // ✅ Transactions Table
-        doc.fontSize(16).fillColor("#333").text("📌 Recent Transactions:", { underline: true }).moveDown();
-        doc.fontSize(12).fillColor("black");
-
-        // Table Header
+        // Transactions Table
+        doc.font('Helvetica-Bold').fontSize(16).fillColor("#333").text("Recent Transactions:", { underline: true }).moveDown(0.5);
         const startX = 50;
         const startY = doc.y;
-        const colWidths = [150, 100, 100, 200]; // Column widths: Date, Type, Amount, Category
+        const colWidths = [130, 90, 90, 150];
 
-        doc.text("Date", startX, startY, { width: colWidths[0], align: "left" });
-        doc.text("Type", startX + colWidths[0], startY, { width: colWidths[1], align: "left" });
-        doc.text("Amount", startX + colWidths[0] + colWidths[1], startY, { width: colWidths[2], align: "left" });
-        doc.text("Category", startX + colWidths[0] + colWidths[1] + colWidths[2], startY, { width: colWidths[3], align: "left" });
-        doc.moveDown(0.5);
+        // Transactions Table Header
+        doc.fillColor("#00695C")
+           .rect(startX, startY, colWidths.reduce((a, b) => a + b), 20)
+           .fill();
+        doc.fillColor("white")
+           .fontSize(12)
+           .text("Date", startX + 5, startY + 5, { width: colWidths[0], align: "left" })
+           .text("Type", startX + colWidths[0] + 5, startY + 5, { width: colWidths[1], align: "left" })
+           .text("Amount", startX + colWidths[0] + colWidths[1] + 5, startY + 5, { width: colWidths[2], align: "right" })
+           .text("Category", startX + colWidths[0] + colWidths[1] + colWidths[2] + 5, startY + 5, { width: colWidths[3], align: "left" });
 
-        // Draw a line under the headers
-        doc.moveTo(startX, doc.y).lineTo(startX + colWidths[0] + colWidths[1] + colWidths[2] + colWidths[3], doc.y).stroke();
-
-        // Table Data
-        transactions.slice(0, 10).forEach((txn) => { // Show only last 10 transactions
-            const y = doc.y + 5;
-            doc.text(new Date(txn.date).toLocaleDateString(), startX, y, { width: colWidths[0], align: "left" });
-            doc.text(txn.type.charAt(0).toUpperCase() + txn.type.slice(1), startX + colWidths[0], y, { width: colWidths[1], align: "left" });
-            doc.text(`$${txn.amount.toFixed(2)}`, startX + colWidths[0] + colWidths[1], y, { width: colWidths[2], align: "left" });
-            doc.text(txn.category, startX + colWidths[0] + colWidths[1] + colWidths[2], y, { width: colWidths[3], align: "left" });
-            doc.moveDown(0.5);
+        // Transactions Table Data
+        doc.font('Times-Roman');
+        currentY = startY + 20;
+        transactions.slice(0, 10).forEach((txn) => {
+            const formattedTxnDate = new Date(txn.date).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
+            doc.fillColor("black")
+               .text(formattedTxnDate, startX + 5, currentY + 5, { width: colWidths[0], align: "left" })
+               .text(txn.type.charAt(0).toUpperCase() + txn.type.slice(1), startX + colWidths[0] + 5, currentY + 5, { width: colWidths[1], align: "left" })
+               .text(`$${txn.amount.toFixed(2)}`, startX + colWidths[0] + colWidths[1] + 5, currentY + 5, { width: colWidths[2], align: "right" })
+               .text(txn.category, startX + colWidths[0] + colWidths[1] + colWidths[2] + 5, currentY + 5, { width: colWidths[3], align: "left" });
+            currentY += 20;
         });
+        doc.moveTo(startX, startY).lineTo(startX + colWidths.reduce((a, b) => a + b), startY).stroke();
+        doc.moveTo(startX, currentY).lineTo(startX + colWidths.reduce((a, b) => a + b), currentY).stroke();
 
-        // ✅ Footer
-        doc.moveDown().fillColor("#777").fontSize(10).text("© Finance Tracker App - All rights reserved.", { align: "center" });
+        // Footer
+        doc.moveDown(1)
+           .fillColor("#777")
+           .fontSize(10)
+           .text("© Finance Tracker App - All rights reserved.", { align: "center" });
 
-        doc.end(); // Finalize PDF
+        doc.end();
 
     } catch (error) {
         res.status(500).json({ message: "Error generating and emailing PDF report", error });
